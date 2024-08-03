@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Notion Map</title>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+    <style>
+        body {
+            margin: 0;
+        }
+
+        #map {
+            height: 100vh;
+            width: 100vw;
+        }
+    </style>
+
+    <script>
+        window.addEventListener('DOMContentLoaded', async () => {
+            // Set up Leaflet map -- it won't display anything until we give it a position.
+            let map = L.map('map');
+
+            // TODO: try find a less contrasty tile
+            L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19,
+                attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+            }).addTo(map);
+
+            // Next fetch the GeoJSON
+            const urlParams = new URLSearchParams(window.location.search);
+            const database_id = urlParams.get('database_id');
+            const coord_col = urlParams.get('coord_col');
+
+            const response = await fetch(`/api/geojson?database_id=${database_id}&coord_col=${encodeURIComponent(coord_col)}`);
+
+            if (!response.ok) {
+                // TODO: put into element
+                console.error(response.status);
+                return;
+            }
+
+            const geojson = await response.json();
+
+            document.querySelector("title").innerText = geojson.database_name;
+
+            // TODO: handle URLs
+            // TODO: use red markers
+            let geojson_layer = L.geoJSON(geojson,
+                {
+                    pointToLayer: (gJPoint, latLng) => {
+                        console.debug(gJPoint);
+                        return L.marker(latLng)
+                            .bindTooltip(gJPoint.properties.name,
+                                {
+                                    permanent: true,
+                                    direction: 'right'
+                                });
+                    }
+                }).addTo(map);
+            console.log("Added geoJSON to map");
+
+            map.fitBounds(geojson_layer.getBounds());
+
+            // TODO: decode geoJSON and work out a Bounds for the objects.
+
+        }, false);
+    </script>
+</head>
+
+<body>
+
+    <!-- Leaflet map -->
+    <div id="map"></div>
+</body>
+
+</html>
