@@ -1,8 +1,15 @@
+"""
+    Flask route definitions.
+
+    Exports 'app' (WSGI-compatible Flask application)
+"""
+
+__all__ = ['app']
+
 from flask import Flask, request
+from .notion import get_geojson
 
 app = Flask(__name__)
-
-from .notion import get_geojson
 
 
 # TODO: replace with serve_static
@@ -17,16 +24,10 @@ def index():
 @app.route("/api/geojson")
 def geojson():
     if 'database_id' not in request.args:
-        return {
-            "error": "Missing parameter 'database_id'",
-            "code": 422
-        }, 422
+        return "Missing parameter 'database_id'", 422
 
     if 'coord_col' not in request.args:
-        return {
-            "error": "Missing parameter 'coord_col'",
-            "code": 422
-        }, 422
+        return "Missing parameter 'coord_col'", 422
 
     database_id = request.args.get('database_id')
     coord_col = request.args.get('coord_col')
@@ -40,7 +41,4 @@ def geojson():
 
     except RuntimeError as e:
         print(e)
-        return {
-            "error": str(e),
-            "code": 500
-        }, 500
+        return str(e), 500

@@ -21,6 +21,45 @@
             height: 100vh;
             width: 100vw;
         }
+
+        div#error {
+            margin: 8px;
+            border: 2px solid crimson;
+            border-radius: 2px;
+            padding: 8px;
+            font-family: sans-serif;
+
+            background-color: color-mix(in srgb, crimson 15%, transparent);
+
+            /* enabled by JS */
+            display: none;
+        }
+
+        div#error h2 {
+            margin-top: 0;
+            margin-bottom: 2px;
+        }
+
+        span#error_code
+        {
+            font-size: 1.25rem;
+            font-family: monospace;
+            text-decoration: red underline;
+        }
+
+        pre#error_body
+        {
+            text-wrap: wrap;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            body {
+                background-color: black;
+            }
+            div#error {
+                color: white;
+            }
+        }
     </style>
 
     <script>
@@ -42,12 +81,29 @@
             const response = await fetch(`/api/geojson?database_id=${database_id}&coord_col=${encodeURIComponent(coord_col)}`);
 
             if (!response.ok) {
-                // TODO: put into element
-                console.error(response.status);
+                document.querySelector("#map").style.display = "none";
+                document.querySelector("#error").style.display = "block";
+
+                document.querySelector("#error_code").innerText = response.status;
+                try {
+                    const error_body = await response.text();
+                    document.querySelector("#error_body").innerText = error_body;
+                } catch (error) {
+                    document.querySelector("#error_body") = "Unknown error";
+                }
                 return;
             }
 
             const geojson = await response.json();
+            // TODO: should have the warnings accessible from HTML.
+            // Perhaps in a Control
+            if (geojson.warnings !== undefined)
+            {
+                for (let warning of geojson.warnings)
+                {
+                    console.warn(warning);
+                }
+            }
 
             document.querySelector("title").innerText = geojson.database_name;
 
@@ -56,7 +112,6 @@
             let geojson_layer = L.geoJSON(geojson,
                 {
                     pointToLayer: (gJPoint, latLng) => {
-                        console.debug(gJPoint);
                         return L.marker(latLng)
                             .bindTooltip(gJPoint.properties.name,
                                 {
@@ -79,6 +134,12 @@
 
     <!-- Leaflet map -->
     <div id="map"></div>
+
+    <div id="error">
+        <h2>Error <span id="error_code"></span></h2>
+        <p><pre id="error_body"></pre></p>
+    </div>
+
 </body>
 
 </html>

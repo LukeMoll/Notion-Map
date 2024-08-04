@@ -1,3 +1,9 @@
+"""
+    Methods to interact with the Notion API.
+"""
+
+__all__ = ['get_geojson']
+
 from notion_client import Client
 from notion_client.errors import APIResponseError
 
@@ -5,6 +11,9 @@ import os
 NOTION_KEY = os.environ['NOTION_KEY']
 notionClient = Client(auth=NOTION_KEY)
 def test_auth():
+    """
+        Function to keep these variables out of global scope.
+    """
     try:
         result = notionClient.users.me()
         print(f"Authenticated to Notion as '{result['name']}'")
@@ -17,11 +26,28 @@ test_auth()
 
 def get_geojson(notion_database_id : str, coordinate_column_name:str, name_column_name=None, url_column_name=None) -> dict:
     """
-        TODO:
+        Fetch a Notion database and construct a GeoJSON FeatureCollection from the rows within. This is the main processing on the Python side.
+
+        The database must exist AND the Integration must have access to it. In Notion, this is done with the 'Connect To' option on a Page.
+        The coordinates must be given in decimal degrees of Latitude followed by Longitude. Minor errors that only affect single rows will
+        generate a Warning in the output object. Major errors that prevent a valid result being produced will raise a RuntimeError.
+
+        Args:
+            notion_database_id (str): ID of the Notion Database. This can be found in the URL.
+            coordinate_column_name (str): Name of the database column (Text type) that holds coordinates.
+            name_column_name (str): Name of the database column (Text or Title type) to be used to name each Feature. 
+                                    If None, then the Title column will be used.
+            url_column_name (str): Name of the database column (URL type) to provide a clickable link on each Feature.
+
+        Returns:
+            GeoJSON FeatureCollection, as a dict. Each Feature also contains 'name' and 'url' properties.
+            The top-level object contains 'database_name' and 'database_url' properties.
+            Additionally, the top-level object may contain a list of 'warnings' strings that were raised
+            during generation.
     """
 
     try:
-        # Check this doesn't return 401 or 404
+        # Running this may raise a few errors; we're mainly interested in provoking a 403 or 404 response.
         result = notionClient.databases.retrieve(database_id=notion_database_id)
 
         # Check that the coordinate column exists and is a suitable type
@@ -60,19 +86,25 @@ def get_geojson(notion_database_id : str, coordinate_column_name:str, name_colum
                 raise RuntimeError(f"Invalid type '{t}' for URL column '{url_column_name}'")
 
     except APIResponseError as e:
-        # TODO: differentiate between forbidden and not found
-        raise e
+        if e.status == 403:
+            raise RuntimeError(f"Notion API error {e.status} {e.code} '{str(e)}' Does the integration have access to the database specified?")
+        elif e.status == 404:
+            raise RuntimeError(f"Notion API error {e.status} {e.code} '{str(e)}'")
+        else:
+            print(f"Notion API error {e.status} {e.code}\n'{str(e)}'")
+            print(f"{notion_database_id=}")
+            raise RuntimeError(f"Notion API error {e.status} {e.code} '{str(e)}'")
 
     geojson = {
         "type": "FeatureCollection",
         "features": [],
         "warnings": [],
-        "database_name": result["title"][0]["plain_text"],
+        "database_name": to_plain_text(result["title"]),
         "database_url": result["url"]
     }
 
     try:
-        # TODO: restrict columns
+        # Is it possible to restrict returned columns to only the ones we want?
         query_res = notionClient.databases.query(notion_database_id)
 
         for row in query_res['results']:
@@ -80,37 +112,33 @@ def get_geojson(notion_database_id : str, coordinate_column_name:str, name_colum
             p_coords = row['properties'][coordinate_column_name]
             p_url = row['properties'][url_column_name] if url_column_name is not None else None
             
-            # TODO: better.
             if "rich_text" in p_name:
-                name = p_name["rich_text"][0]["plain_text"]
+                name = to_plain_text(p_name["rich_text"])
             elif "title" in p_name:
-                name = p_name["title"][0]["plain_text"]
+                name = to_plain_text(p_name["title"])
 
             # Decode coordinates into lattitude and longitude
-            # TODO: replace with method to get 0+ rich_text parts and stich together the plain_text parts.
             try:
-                s_coords = p_coords['rich_text'][0]['plain_text']
+                s_coords = to_plain_text(p_coords['rich_text'])
                 parts = s_coords.split(",")
                 if len(parts) != 2:
-                    warnings.append(f"Invalid coordinates for '{name}': '{s_coords}'. Ommitting row.")
+                    geojson['warnings'].append(f"Invalid coordinates for '{name}': '{s_coords}'. Ommitting row.")
                     continue
 
                 lattitude = float(parts[0])
                 longitude = float(parts[1])
 
                 if (not (-90.0 <= lattitude <= +90.0)) or (not (-180.0 <= longitude <= +180.0)):
-                    warnings.append(f"Coordinates out-of-range for '{name}': {lattitude},{longitude}. Ommitting row.")
+                    geojson['warnings'].append(f"Coordinates out-of-range for '{name}': {lattitude},{longitude}. Ommitting row.")
                     continue
 
             except IndexError:
-                warnings.append(f"Could not get coordinates for '{name}'. Ommitting row.")
+                geojson['warnings'].append(f"Could not get coordinates for '{name}'. Ommitting row.")
                 continue
 
             except ValueError:
-                warnings.append(f"Could not parse coordinates for '{name}': '{s_coords}'. Ommitting row.")
+                geojson['warnings'].append(f"Could not parse coordinates for '{name}': '{s_coords}'. Ommitting row.")
                 continue
-
-            # TODO: get URL too.
 
             geojson["features"].append({
                 "type": "Feature",
@@ -126,6 +154,10 @@ def get_geojson(notion_database_id : str, coordinate_column_name:str, name_colum
                 }
             })
 
+            if p_url is not None and p_url['url'] != None and len(p_url['url']) > 0:
+                # Blank fields can be None instead of empty.
+                geojson['features'][-1]['properties']['url'] = p_url['url']
+
     except APIResponseError as e:
         raise e
 
@@ -134,19 +166,41 @@ def get_geojson(notion_database_id : str, coordinate_column_name:str, name_colum
 
     return geojson
 
+def to_plain_text(rich_text_block : list[dict]) -> str:
+    """
+        Takes an array of 0 or more Rich Text objects and concatenates their plain_text properties.
+    """
+
+    if type(rich_text_block) != list:
+        raise TypeError(f"Invalid type {type(rich_text_block)}, expecting list.")
+
+    buf = ""
+
+    for d in rich_text_block:
+        if type(d) != dict:
+            raise TypeError(f"Invalid element type {type(d)} in list, expecting dict.")
+
+        buf += d['plain_text']
+
+    return buf        
+
 
 # Server-less test mode
 if __name__ == "__main__":
     import sys
 
-    if len(sys.argv) == 3:
+    if len(sys.argv) >= 3:
         db_id = sys.argv[1]
         coord_col = sys.argv[2]
-        print(f"Looking up Database ID {db_id} using coordinates from column '{coord_col}'")
+        if len(sys.argv) >= 4:
+            url_col = sys.argv[3]
+        else:
+            url_col = None
+        print(f"Looking up Database ID {db_id} using coordinates from column '{coord_col}', URLs from column '{url_col}'")
     else:
-        print("USAGE: <Database ID> <Coordinates column name>")
+        print("USAGE: <Database ID> <Coordinates column name> [URL column name]")
         exit(1)
 
     from pprint import pp
 
-    pp(get_geojson(db_id, coord_col))
+    pp(get_geojson(db_id, coord_col, url_column_name=url_col))
