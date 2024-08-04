@@ -6,7 +6,7 @@
 
 __all__ = ['app']
 
-from flask import Flask, request, send_static_file
+from flask import Flask, request, send_file
 from .notion import get_geojson
 
 app = Flask(__name__)
@@ -17,7 +17,7 @@ HTML_DIR = os.path.join(os.path.dirname(__file__), "html")
 
 @app.route("/")
 def index():
-    return send_static_file(os.path.join(HTML_DIR, "index.html"))
+    return send_file(os.path.join(HTML_DIR, "index.html"))
 
 @app.route("/api/geojson")
 def geojson():
